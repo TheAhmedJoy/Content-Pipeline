@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import type { TranscriptBundle, VideoInput } from "./api/transcribe/route";
 
 const DEFAULT_TERMS = ["sydney bakery", "sydney cafe", "sydney sourdough"];
 
@@ -50,6 +51,27 @@ function analyzeResults(data: SearchResponse | undefined) {
   return { count: videos.length, videos, fields, withSubtitles, withCaptions, sample: videos.slice(0, 3) };
 }
 
+// Flatten a search item into the metadata we keep alongside its transcript.
+function toVideoInput(v: VideoItem): VideoInput | null {
+  if (!v.url) return null;
+  const created = Number(v.create_time);
+  return {
+    id: v.id,
+    url: v.url,
+    author: { username: v.author?.unique_id, nickname: v.author?.nickname, followers: v.author?.follower_count },
+    caption: v.desc,
+    posted_at: Number.isFinite(created) && created > 0 ? new Date(created * 1000).toISOString() : v.create_time,
+    duration_s: v.video?.duration,
+    stats: {
+      views: v.statistics?.play_count,
+      likes: v.statistics?.digg_count,
+      comments: v.statistics?.comment_count,
+      shares: v.statistics?.share_count,
+      saves: v.statistics?.collect_count,
+    },
+  };
+}
+
 function formatCount(n: number | undefined): string {
   if (n === undefined) return "–";
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -64,12 +86,17 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [showRaw, setShowRaw] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const [transcripts, setTranscripts] = useState<{ file: string; bundle: TranscriptBundle } | null>(null);
+  const [transcriptError, setTranscriptError] = useState<string | null>(null);
 
   async function run(term: string) {
     setLoading(true);
     setError(null);
     setResult(null);
     setCopied(false);
+    setTranscripts(null);
+    setTranscriptError(null);
     setQuery(term);
     try {
       const res = await fetch(`/api/search?query=${encodeURIComponent(term)}`);
@@ -88,6 +115,38 @@ export default function Home() {
   async function copyLinks() {
     await navigator.clipboard.writeText(links.join("\n"));
     setCopied(true);
+  }
+
+  async function transcribeAll() {
+    if (!result || !analysis) return;
+    setTranscribing(true);
+    setTranscriptError(null);
+    setTranscripts(null);
+    try {
+      const videos = analysis.videos.map(toVideoInput).filter((v): v is VideoInput => !!v);
+      const res = await fetch("/api/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: result.query, region: result.region, language: "en", videos }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+      setTranscripts(json);
+    } catch (e) {
+      setTranscriptError(String(e));
+    } finally {
+      setTranscribing(false);
+    }
+  }
+
+  function downloadTranscripts() {
+    if (!transcripts) return;
+    const blob = new Blob([JSON.stringify(transcripts.bundle, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = transcripts.file.split("/").pop() ?? "transcripts.json";
+    a.click();
+    URL.revokeObjectURL(a.href);
   }
 
   return (
@@ -174,12 +233,21 @@ export default function Home() {
                   <h2 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">
                     Video links ({links.length})
                   </h2>
-                  <button
-                    onClick={copyLinks}
-                    className="rounded-md border border-zinc-200 dark:border-zinc-700 px-2 py-1 text-xs text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
-                  >
-                    {copied ? "Copied" : "Copy all links"}
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={copyLinks}
+                      className="rounded-md border border-zinc-200 dark:border-zinc-700 px-2 py-1 text-xs text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+                    >
+                      {copied ? "Copied" : "Copy all links"}
+                    </button>
+                    <button
+                      onClick={transcribeAll}
+                      disabled={transcribing || links.length === 0}
+                      className="rounded-md bg-zinc-900 dark:bg-zinc-50 text-white dark:text-zinc-900 px-2 py-1 text-xs font-medium disabled:opacity-50 hover:bg-zinc-700 dark:hover:bg-zinc-200 transition-colors"
+                    >
+                      {transcribing ? `Transcribing ${links.length}...` : "Transcribe all"}
+                    </button>
+                  </div>
                 </div>
                 <ol className="space-y-2 text-sm">
                   {analysis.videos.map((v, i) => (
@@ -207,6 +275,57 @@ export default function Home() {
                     </li>
                   ))}
                 </ol>
+              </div>
+            )}
+
+            {/* Transcriptions */}
+            {(transcribing || transcripts || transcriptError) && (
+              <div className="rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+                    Transcriptions
+                    {transcripts && ` (${transcripts.bundle.transcribed_count} / ${transcripts.bundle.video_count})`}
+                  </h2>
+                  {transcripts && (
+                    <button
+                      onClick={downloadTranscripts}
+                      className="rounded-md border border-zinc-200 dark:border-zinc-700 px-2 py-1 text-xs text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+                    >
+                      Download JSON
+                    </button>
+                  )}
+                </div>
+                {transcribing && <div className="text-sm text-zinc-500">Fetching transcripts for {links.length} videos...</div>}
+                {transcriptError && <div className="text-sm text-red-600 dark:text-red-400">{transcriptError}</div>}
+                {transcripts && (
+                  <>
+                    <div className="text-xs text-zinc-500 mb-3">
+                      Saved to <span className="font-mono">{transcripts.file}</span>
+                    </div>
+                    <ol className="space-y-3 text-sm">
+                      {transcripts.bundle.videos.map((v, i) => (
+                        <li key={v.id ?? i} className="flex gap-3 border-b border-zinc-100 dark:border-zinc-800 pb-3 last:border-0">
+                          <span className="w-6 shrink-0 text-right text-xs text-zinc-400 pt-0.5">{i + 1}</span>
+                          <div className="min-w-0 flex-1">
+                            <a
+                              href={v.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline"
+                            >
+                              @{v.author?.username ?? "unknown"}
+                            </a>
+                            {v.transcript ? (
+                              <p className="mt-1 text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap">{v.transcript}</p>
+                            ) : (
+                              <p className="mt-1 text-xs text-zinc-400 italic">{v.transcript_error ?? "No transcript"}</p>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                  </>
+                )}
               </div>
             )}
 
