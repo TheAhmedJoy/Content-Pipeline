@@ -1,7 +1,8 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { createPartFromUri, FileState, GoogleGenAI, MediaResolution, type File as GeminiFile, type Part } from "@google/genai";
 import { mapLimit } from "./async";
+import { saveLocalCopy } from "./local-files";
 import {
   GEMINI_MEDIA_RESOLUTION,
   GEMINI_MODEL,
@@ -43,7 +44,7 @@ interface VideoRow {
 export interface ReportResult {
   id: string;
   created_at: string;
-  file: string;
+  file: string | null; // local markdown copy; null when deployed
   model: string;
   search_terms: string[];
   video_ids: string[];
@@ -103,7 +104,8 @@ export async function generateWeeklyReport(): Promise<ReportResult> {
   const mediaResolution = MEDIA_RESOLUTIONS[GEMINI_MEDIA_RESOLUTION];
   if (!mediaResolution) throw new Error(`Unknown GEMINI_MEDIA_RESOLUTION "${GEMINI_MEDIA_RESOLUTION}" (use low, medium or high)`);
 
-  const prompt = await readFile(path.join(process.cwd(), REPORT_PROMPT_PATH), "utf8");
+  // Bundled via outputFileTracingIncludes in next.config.ts, so tracing is skipped here.
+  const prompt = await readFile(path.join(/*turbopackIgnore: true*/ process.cwd(), REPORT_PROMPT_PATH), "utf8");
 
   const since = new Date(Date.now() - REPORT_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const { data, error } = await db
@@ -175,8 +177,8 @@ export async function generateWeeklyReport(): Promise<ReportResult> {
       `<!-- search terms: ${searchTerms.join(", ")} | ${attachedIds.length} of ${videos.length} video files attached | tokens: ${usage.total_tokens ?? "?"} -->`,
       "",
     ].join("\n");
-    await mkdir(path.join(process.cwd(), "reports"), { recursive: true });
-    await writeFile(path.join(process.cwd(), file), header + reportMd, "utf8");
+    // Local copy only; the reports table is the source of truth.
+    const savedFile = await saveLocalCopy(file, header + reportMd);
 
     const { data: row, error: insertError } = await db
       .from("reports")
@@ -186,15 +188,18 @@ export async function generateWeeklyReport(): Promise<ReportResult> {
         model: GEMINI_MODEL,
         media_resolution: GEMINI_MEDIA_RESOLUTION,
         report_md: reportMd,
-        report_file: file,
+        report_file: savedFile,
         ...usage,
         response: JSON.parse(JSON.stringify(response)),
       })
       .select("id, created_at")
       .single();
-    if (insertError) throw new Error(`Saving report failed (markdown is still at ${file}): ${insertError.message}`);
+    if (insertError) {
+      const where = savedFile ? ` (markdown is still at ${savedFile})` : "";
+      throw new Error(`Saving report failed${where}: ${insertError.message}`);
+    }
 
-    return { id: row.id, created_at: row.created_at, file, model: GEMINI_MODEL, search_terms: searchTerms, video_ids: attachedIds, skipped, usage, report_md: reportMd };
+    return { id: row.id, created_at: row.created_at, file: savedFile, model: GEMINI_MODEL, search_terms: searchTerms, video_ids: attachedIds, skipped, usage, report_md: reportMd };
   } finally {
     // Clean up Gemini-side copies whether or not the request succeeded.
     await Promise.all(
