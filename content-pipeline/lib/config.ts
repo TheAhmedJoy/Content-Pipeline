@@ -17,3 +17,6 @@ export const REPORT_PROMPT_PATH = "prompts/weekly_report.md";
 export const REPORT_WINDOW_DAYS = 7;
 // Max Gemini file uploads in flight at once.
 export const GEMINI_UPLOAD_CONCURRENCY = 3;
+// Time the generate step may spend calling Gemini (including retries) in one request.
+// Kept under Vercel Hobby's 300 s function limit with room to save the result.
+export const REPORT_GENERATE_BUDGET_MS = 240_000;
