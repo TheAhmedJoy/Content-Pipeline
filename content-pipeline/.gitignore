@@ -47,6 +47,9 @@ next-env.d.ts
 # generated reports (also saved in Supabase)
 /reports
 
+# supabase
+/supabase/.temp
+
 # Agents
 AGENTS.md
 CLAUDE.md
