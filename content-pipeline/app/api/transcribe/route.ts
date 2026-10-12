@@ -1,6 +1,5 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { mapLimit } from "@/lib/async";
+import { saveLocalCopy } from "@/lib/local-files";
 import { saveTranscripts } from "@/lib/videos";
 
 // Max transcript requests in flight to ScrapeCreators at once.
@@ -110,9 +109,7 @@ export async function POST(request: Request) {
 
   const stamp = generatedAt.toISOString().replace(/[:.]/g, "-");
   const filename = `${stamp}_${slugify(query ?? "videos")}.json`;
-  const dir = path.join(process.cwd(), "transcripts");
-  await mkdir(dir, { recursive: true });
-  await writeFile(path.join(dir, filename), JSON.stringify(bundle, null, 2), "utf8");
+  const file = await saveLocalCopy(`transcripts/${filename}`, JSON.stringify(bundle, null, 2));
 
-  return Response.json({ file: `transcripts/${filename}`, bundle });
+  return Response.json({ file, filename, bundle });
 }
