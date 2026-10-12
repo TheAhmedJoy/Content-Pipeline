@@ -53,7 +53,7 @@ export default function Home() {
   const [showRaw, setShowRaw] = useState(false);
   const [copied, setCopied] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
-  const [transcripts, setTranscripts] = useState<{ file: string; bundle: TranscriptBundle } | null>(null);
+  const [transcripts, setTranscripts] = useState<{ file: string | null; filename: string; bundle: TranscriptBundle } | null>(null);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
 
   async function run(term: string) {
@@ -111,7 +111,7 @@ export default function Home() {
     const blob = new Blob([JSON.stringify(transcripts.bundle, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = transcripts.file.split("/").pop() ?? "transcripts.json";
+    a.download = transcripts.filename;
     a.click();
     URL.revokeObjectURL(a.href);
   }
@@ -282,9 +282,11 @@ export default function Home() {
                 {transcriptError && <div className="text-sm text-red-600 dark:text-red-400">{transcriptError}</div>}
                 {transcripts && (
                   <>
-                    <div className="text-xs text-zinc-500 mb-3">
-                      Saved to <span className="font-mono">{transcripts.file}</span>
-                    </div>
+                    {transcripts.file && (
+                      <div className="text-xs text-zinc-500 mb-3">
+                        Saved to <span className="font-mono">{transcripts.file}</span>
+                      </div>
+                    )}
                     <ol className="space-y-3 text-sm">
                       {transcripts.bundle.videos.map((v, i) => (
                         <li key={v.id ?? i} className="flex gap-3 border-b border-zinc-100 dark:border-zinc-800 pb-3 last:border-0">
