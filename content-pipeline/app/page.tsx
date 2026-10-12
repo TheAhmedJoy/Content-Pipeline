@@ -2,26 +2,11 @@
 
 import { useState } from "react";
 import type { TranscriptBundle, VideoInput } from "./api/transcribe/route";
+import { toVideoInput, type VideoItem } from "@/lib/tiktok";
+import type { DownloadResult } from "@/lib/videos";
+import ReportPanel from "./report-panel";
 
 const DEFAULT_TERMS = ["sydney bakery", "sydney cafe", "sydney sourdough"];
-
-// Shape of one entry in ScrapeCreators' `items` array (only the fields we use).
-interface VideoItem {
-  id?: string;
-  desc?: string;
-  url?: string;
-  create_time?: string;
-  statistics?: {
-    play_count?: number;
-    digg_count?: number;
-    comment_count?: number;
-    share_count?: number;
-    collect_count?: number;
-  };
-  author?: { unique_id?: string; nickname?: string; follower_count?: number };
-  video?: { duration?: number; cla_info?: { caption_infos?: unknown[] | null } };
-  [key: string]: unknown;
-}
 
 interface SearchResponse {
   success?: boolean;
@@ -36,6 +21,8 @@ interface SearchResult {
   query: string;
   region?: string;
   data: SearchResponse;
+  downloads?: DownloadResult[];
+  download_error?: string;
 }
 
 function analyzeResults(data: SearchResponse | undefined) {
@@ -49,27 +36,6 @@ function analyzeResults(data: SearchResponse | undefined) {
   const withCaptions = videos.filter((v) => typeof v.desc === "string" && v.desc.trim().length > 0).length;
 
   return { count: videos.length, videos, fields, withSubtitles, withCaptions, sample: videos.slice(0, 3) };
-}
-
-// Flatten a search item into the metadata we keep alongside its transcript.
-function toVideoInput(v: VideoItem): VideoInput | null {
-  if (!v.url) return null;
-  const created = Number(v.create_time);
-  return {
-    id: v.id,
-    url: v.url,
-    author: { username: v.author?.unique_id, nickname: v.author?.nickname, followers: v.author?.follower_count },
-    caption: v.desc,
-    posted_at: Number.isFinite(created) && created > 0 ? new Date(created * 1000).toISOString() : v.create_time,
-    duration_s: v.video?.duration,
-    stats: {
-      views: v.statistics?.play_count,
-      likes: v.statistics?.digg_count,
-      comments: v.statistics?.comment_count,
-      shares: v.statistics?.share_count,
-      saves: v.statistics?.collect_count,
-    },
-  };
 }
 
 function formatCount(n: number | undefined): string {
@@ -110,6 +76,7 @@ export default function Home() {
   }
 
   const analysis = result ? analyzeResults(result.data) : null;
+  const downloadFor = (id?: string) => result?.downloads?.find((d) => d.id === id);
   const links = analysis ? analysis.videos.map((v) => v.url).filter((u): u is string => !!u) : [];
 
   async function copyLinks() {
@@ -150,17 +117,17 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 p-8 font-sans">
+    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 p-8 font-sans print:min-h-0 print:bg-white print:p-0">
       <div className="max-w-4xl mx-auto">
-        <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-50 mb-1">
+        <h1 className="print:hidden text-2xl font-bold text-zinc-900 dark:text-zinc-50 mb-1">
           ScrapeCreators API Explorer
         </h1>
-        <p className="text-sm text-zinc-500 mb-8">
+        <p className="print:hidden text-sm text-zinc-500 mb-8">
           Test the TikTok search endpoint and inspect raw responses
         </p>
 
         {/* Search bar */}
-        <div className="flex gap-2 mb-4">
+        <div className="print:hidden flex gap-2 mb-4">
           <input
             type="text"
             value={query}
@@ -179,7 +146,7 @@ export default function Home() {
         </div>
 
         {/* Quick terms */}
-        <div className="flex gap-2 mb-8">
+        <div className="print:hidden flex gap-2 mb-8">
           {DEFAULT_TERMS.map((t) => (
             <button
               key={t}
@@ -192,16 +159,19 @@ export default function Home() {
           ))}
         </div>
 
+        {/* Gemini report */}
+        <ReportPanel />
+
         {/* Error */}
         {error && (
-          <div className="mb-6 rounded-lg bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 p-4 text-sm text-red-700 dark:text-red-300">
+          <div className="print:hidden mb-6 rounded-lg bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 p-4 text-sm text-red-700 dark:text-red-300">
             {error}
           </div>
         )}
 
         {/* Results summary */}
         {result && analysis && (
-          <div className="space-y-6">
+          <div className="print:hidden space-y-6">
             {/* Stats */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               {[
@@ -213,6 +183,12 @@ export default function Home() {
                 { label: "Credits remaining", value: result.data?.credits_remaining ?? "–" },
                 { label: "Next cursor", value: result.data?.cursor ?? "–" },
                 { label: "Region", value: result.region ?? "–" },
+                {
+                  label: "MP4s downloaded",
+                  value: result.downloads?.length
+                    ? `${result.downloads.filter((d) => d.outcome !== "failed").length} / ${result.downloads.length}`
+                    : "–",
+                },
               ].map((s) => (
                 <div
                   key={s.label}
@@ -225,6 +201,12 @@ export default function Home() {
                 </div>
               ))}
             </div>
+
+            {result.download_error && (
+              <div className="rounded-lg bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 p-4 text-sm text-red-700 dark:text-red-300">
+                Download step failed: {result.download_error}
+              </div>
+            )}
 
             {/* Video links */}
             {analysis.videos.length > 0 && (
@@ -269,6 +251,7 @@ export default function Home() {
                         <div className="text-xs text-zinc-500 mt-0.5">
                           @{v.author?.unique_id ?? "unknown"} · {formatCount(v.author?.follower_count)} followers ·{" "}
                           {formatCount(v.statistics?.play_count)} views · {formatCount(v.statistics?.digg_count)} likes
+                          {downloadFor(v.id) && ` · MP4 ${downloadFor(v.id)!.outcome}`}
                         </div>
                         {v.desc && <div className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5 line-clamp-2">{v.desc}</div>}
                       </div>
