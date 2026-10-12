@@ -1,7 +1,7 @@
 import { generateWeeklyReport, getLatestReport } from "@/lib/report";
 
 // Uploading videos to Gemini and generating the report can take several minutes.
-export const maxDuration = 800;
+export const maxDuration = 300;
 
 // Triggered manually from the "Send to Gemini" button, not after collection.
 export async function POST() {
