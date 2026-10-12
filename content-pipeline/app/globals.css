@@ -24,3 +24,33 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+@plugin "@tailwindcss/typography";
+
+/* Dark mode on screen only, so printed PDFs are always dark text on white. */
+@custom-variant dark-screen (@media screen and (prefers-color-scheme: dark));
+
+/* Printing (Download PDF) shows only the report, on a white page. */
+@media print {
+  @page {
+    margin: 15mm;
+  }
+  body {
+    background: #fff;
+    color: #000;
+  }
+  /* Keep table rows and headings from splitting across pages. */
+  tr,
+  h1,
+  h2,
+  h3,
+  h4 {
+    break-inside: avoid;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    break-after: avoid;
+  }
+}
