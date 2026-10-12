@@ -3,7 +3,27 @@
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { ReportResult } from "@/lib/report";
+import type { GenerateResult, PrepareResult, ReportResult } from "@/lib/report";
+
+// Generate calls to make while Gemini reports busy (each can take up to ~4 min) before
+// handing back to the user, and the pause between them.
+const MAX_GENERATE_CALLS = 3;
+const BUSY_PAUSE_MS = 15_000;
+
+type Phase = "uploading" | "writing" | "busy";
+
+const PHASE_LABELS: Record<Phase, string> = {
+  uploading: "Uploading videos to Gemini…",
+  writing: "Writing report…",
+  busy: "Gemini is busy, retrying…",
+};
+
+async function postJson<T>(url: string): Promise<T> {
+  const res = await fetch(url, { method: "POST" });
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+  return json as T;
+}
 
 function Spinner() {
   return (
@@ -24,7 +44,10 @@ function formatDate(iso: string): string {
 
 // Weekly report: manual "Send to Gemini" trigger, rendered report, and PDF download.
 export default function ReportPanel() {
-  const [reporting, setReporting] = useState(false);
+  const [phase, setPhase] = useState<Phase | null>(null);
+  const reporting = phase !== null;
+  // A run whose videos are uploaded but whose report isn't written yet, so Retry can skip the upload.
+  const [pendingRunId, setPendingRunId] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [report, setReport] = useState<ReportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -45,19 +68,52 @@ export default function ReportPanel() {
     return () => clearInterval(timer);
   }, [reporting]);
 
+  // Report runs in steps so each request fits the hosting time limit:
+  // upload the videos, then generate (repeated while Gemini is overloaded).
   async function sendToGemini() {
-    setReporting(true);
     setElapsed(0);
     setError(null);
+    setPendingRunId(null);
+    setPhase("uploading");
     try {
-      const res = await fetch("/api/report", { method: "POST" });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
-      setReport(json);
+      const run = await postJson<PrepareResult>("/api/report");
+      setPendingRunId(run.id);
+      await generate(run.id);
     } catch (e) {
       setError(String(e));
     } finally {
-      setReporting(false);
+      setPhase(null);
+    }
+  }
+
+  async function retryGenerate() {
+    if (!pendingRunId) return;
+    setElapsed(0);
+    setError(null);
+    try {
+      await generate(pendingRunId);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setPhase(null);
+    }
+  }
+
+  async function generate(id: string) {
+    for (let call = 1; call <= MAX_GENERATE_CALLS; call++) {
+      setPhase(call === 1 ? "writing" : "busy");
+      const result = await postJson<GenerateResult>(`/api/report/${id}/generate`);
+      if (result.status === "done") {
+        setReport(result.report);
+        setPendingRunId(null);
+        return;
+      }
+      if (call < MAX_GENERATE_CALLS) {
+        setPhase("busy");
+        await new Promise((r) => setTimeout(r, BUSY_PAUSE_MS));
+      } else {
+        throw new Error(`Gemini is still overloaded (${result.error}). The videos are uploaded; click Retry to try again without re-uploading.`);
+      }
     }
   }
 
@@ -82,8 +138,16 @@ export default function ReportPanel() {
           {reporting && (
             <span className="flex items-center gap-2 text-xs text-zinc-500" role="status">
               <Spinner />
-              Analyzing videos… {formatElapsed(elapsed)} (usually 3–6 min)
+              {phase && PHASE_LABELS[phase]} {formatElapsed(elapsed)} (usually 2–3 min)
             </span>
+          )}
+          {pendingRunId && !reporting && (
+            <button
+              onClick={retryGenerate}
+              className="rounded-md border border-zinc-200 dark:border-zinc-700 px-3 py-1.5 text-xs text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+            >
+              Retry
+            </button>
           )}
           {report && !reporting && (
             <button
