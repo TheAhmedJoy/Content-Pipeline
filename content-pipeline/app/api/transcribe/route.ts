@@ -1,5 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { mapLimit } from "@/lib/async";
+import { saveTranscripts } from "@/lib/videos";
 
 // Max transcript requests in flight to ScrapeCreators at once.
 const CONCURRENCY = 5;
@@ -13,6 +15,10 @@ export interface VideoInput {
   posted_at?: string;
   duration_s?: number;
   stats?: { views?: number; likes?: number; comments?: number; shares?: number; saves?: number };
+  // Video file links in the order to try them (see orderPlayUrls in lib/tiktok.ts).
+  play_urls?: string[];
+  file_size_bytes?: number;
+  cover_url?: string;
 }
 
 export interface TranscribedVideo extends VideoInput {
@@ -66,20 +72,6 @@ async function fetchTranscript(video: VideoInput, language: string, apiKey: stri
   }
 }
 
-// Run fn over items with at most `limit` calls in flight, preserving order.
-async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  async function worker() {
-    while (next < items.length) {
-      const i = next++;
-      results[i] = await fn(items[i]);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
-}
-
 function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "videos";
 }
@@ -101,6 +93,9 @@ export async function POST(request: Request) {
   }
 
   const results = await mapLimit(videos, CONCURRENCY, (v) => fetchTranscript(v, language, apiKey));
+
+  // Keep the database copy in step with the JSON file; the file is still written if this fails.
+  await saveTranscripts(results).catch((e) => console.error(`[transcript] save failed: ${e}`));
 
   const generatedAt = new Date();
   const bundle: TranscriptBundle = {
