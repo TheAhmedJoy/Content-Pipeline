@@ -109,8 +109,12 @@ export default function ReportPanel() {
         <div className="mt-4 print:mt-0">
           <div className="text-xs text-zinc-500 mb-4 print:hidden">
             {formatDate(report.created_at)} · {report.video_ids.length} videos · {report.model} ·{" "}
-            {report.usage.total_tokens?.toLocaleString() ?? "?"} tokens · saved to{" "}
-            <span className="font-mono">{report.file}</span>
+            {report.usage.total_tokens?.toLocaleString() ?? "?"} tokens
+            {report.file && (
+              <>
+                {" "}· saved to <span className="font-mono">{report.file}</span>
+              </>
+            )}
             {report.skipped.length > 0 && ` · ${report.skipped.length} files failed to upload`}
           </div>
           <div className="hidden print:block text-xs text-zinc-600 mb-4">
